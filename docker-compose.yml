@@ -1,0 +1,46 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: landscore-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: landscore
+      POSTGRES_PASSWORD: landscore_secret_2024
+      POSTGRES_DB: landscore_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - landscore_postgres_data:/var/lib/postgresql/data
+      - ./server/src/db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U landscore -d landscore_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: landscore-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@landscore.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    volumes:
+      - landscore_pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  landscore_postgres_data:
+    driver: local
+  landscore_pgadmin_data:
+    driver: local
+
+networks:
+  default:
+    name: landscore-network

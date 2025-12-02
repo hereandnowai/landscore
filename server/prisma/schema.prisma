@@ -1,0 +1,280 @@
+// Prisma schema for LANDSCORE GIS Platform
+// Uses PostgreSQL with PostGIS for geospatial data
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+enum UserRole {
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  firstName    String?  @map("first_name")
+  lastName     String?  @map("last_name")
+  avatarUrl    String?  @map("avatar_url")
+  role         UserRole @default(VIEWER)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  savedSearches SavedSearch[]
+  savedParcels  SavedParcel[]
+  savedShapes   SavedShape[]
+  chatSessions  ChatSession[]
+
+  @@map("users")
+}
+
+// ============================================
+// PARCEL & LAND DATA (Core GIS Entities)
+// ============================================
+
+model Parcel {
+  id          String   @id @default(cuid())
+  parcelId    String   @unique @map("parcel_id") // External parcel identifier
+  apn         String?  // Assessor's Parcel Number
+  address     String?
+  city        String?
+  state       String?
+  zipCode     String?  @map("zip_code")
+  country     String   @default("India")
+  
+  // Area measurements
+  areaSqft    Float    @map("area_sqft")
+  areaAcres   Float    @map("area_acres")
+  areaSqm     Float    @map("area_sqm")
+  
+  // Geometry stored as GeoJSON text (will use raw SQL for PostGIS operations)
+  // The actual geometry column is created via migration
+  geometryJson String? @map("geometry_json") @db.Text
+  centroidLat  Float?  @map("centroid_lat")
+  centroidLng  Float?  @map("centroid_lng")
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  owner       Owner?      @relation(fields: [ownerId], references: [id])
+  ownerId     String?     @map("owner_id")
+  landData    LandData?
+  valuations  Valuation[]
+  savedBy     SavedParcel[]
+
+  @@index([parcelId])
+  @@index([city])
+  @@index([ownerId])
+  @@map("parcels")
+}
+
+model Owner {
+  id           String   @id @default(cuid())
+  name         String
+  ownerType    String   @map("owner_type") // INDIVIDUAL, CORPORATION, GOVERNMENT, TRUST
+  mailingAddress String? @map("mailing_address")
+  phone        String?
+  email        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  parcels      Parcel[]
+
+  @@map("owners")
+}
+
+model LandData {
+  id            String   @id @default(cuid())
+  parcelId      String   @unique @map("parcel_id")
+  
+  // Soil & Agriculture
+  soilType      String?  @map("soil_type") // CLAY, LOAM, SANDY, SILT, etc.
+  soilQuality   Int?     @map("soil_quality") // 1-10 rating
+  croplandClass String?  @map("cropland_class") // PRIME, UNIQUE, STATEWIDE, LOCAL, NOT_PRIME
+  irrigationType String? @map("irrigation_type") // DRIP, FLOOD, SPRINKLER, NONE
+  
+  // Zoning & Legal
+  zoningCode    String?  @map("zoning_code") // AGRICULTURAL, RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MIXED
+  zoningDescription String? @map("zoning_description")
+  landUseCode   String?  @map("land_use_code")
+  
+  // Terrain
+  elevation     Float?   // meters
+  slope         Float?   // percentage
+  floodZone     String?  @map("flood_zone") // A, AE, X, etc.
+  
+  // Features
+  hasWaterAccess  Boolean @default(false) @map("has_water_access")
+  hasRoadAccess   Boolean @default(true) @map("has_road_access")
+  hasUtilities    Boolean @default(false) @map("has_utilities")
+  distanceToWater Float?  @map("distance_to_water") // meters
+  distanceToRoad  Float?  @map("distance_to_road") // meters
+  
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  parcel        Parcel   @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+
+  @@map("land_data")
+}
+
+model Valuation {
+  id              String    @id @default(cuid())
+  parcelId        String    @map("parcel_id")
+  
+  // Current Values
+  estimatedPrice  Float     @map("estimated_price") // AI/Algorithm estimated
+  taxAssessedValue Float?   @map("tax_assessed_value")
+  marketValue     Float?    @map("market_value")
+  
+  // Price per unit
+  pricePerSqft    Float?    @map("price_per_sqft")
+  pricePerAcre    Float?    @map("price_per_acre")
+  
+  // Historical Sale
+  lastSaleDate    DateTime? @map("last_sale_date")
+  lastSalePrice   Float?    @map("last_sale_price")
+  
+  // Valuation metadata
+  valuationDate   DateTime  @default(now()) @map("valuation_date")
+  valuationSource String?   @map("valuation_source") // ASSESSMENT, ALGORITHM, SALE
+  confidence      Float?    // 0-1 confidence score
+  
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  parcel          Parcel    @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+
+  @@index([parcelId])
+  @@index([estimatedPrice])
+  @@map("valuations")
+}
+
+// ============================================
+// USER SAVES & BOOKMARKS
+// ============================================
+
+model SavedSearch {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  name        String
+  description String?
+  
+  // Search criteria stored as JSON
+  filters     String   @db.Text // JSON string of filter criteria
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("saved_searches")
+}
+
+model SavedParcel {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  parcelId  String   @map("parcel_id")
+  notes     String?  @db.Text
+  tags      String[] // Array of tags
+  
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parcel    Parcel   @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, parcelId])
+  @@map("saved_parcels")
+}
+
+model SavedShape {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  name         String
+  description  String?
+  shapeType    String   @map("shape_type") // POLYGON, CIRCLE, RECTANGLE
+  
+  // GeoJSON geometry
+  geometryJson String   @map("geometry_json") @db.Text
+  
+  // For circles
+  centerLat    Float?   @map("center_lat")
+  centerLng    Float?   @map("center_lng")
+  radiusMeters Float?   @map("radius_meters")
+  
+  color        String   @default("#3b82f6")
+  
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("saved_shapes")
+}
+
+// ============================================
+// AI CHAT SESSIONS
+// ============================================
+
+model ChatSession {
+  id        String        @id @default(cuid())
+  userId    String?       @map("user_id")
+  title     String?
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages  ChatMessage[]
+
+  @@index([userId])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id           String      @id @default(cuid())
+  sessionId    String      @map("session_id")
+  role         String      // user, assistant, system, function
+  content      String      @db.Text
+  
+  // Function calling metadata
+  functionName String?     @map("function_name")
+  functionArgs String?     @map("function_args") @db.Text
+  functionResult String?   @map("function_result") @db.Text
+  
+  // Map context at time of message
+  viewportBounds String?   @map("viewport_bounds") // JSON of map bounds
+  highlightedParcels String[] @map("highlighted_parcels") // Array of parcel IDs
+  
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  session      ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("chat_messages")
+}
