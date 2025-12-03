@@ -19,6 +19,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - landscore-network
 
   # Optional: pgAdmin for database management
   pgadmin:
@@ -34,6 +36,51 @@ services:
       - postgres
     volumes:
       - landscore_pgadmin_data:/var/lib/pgadmin
+    networks:
+      - landscore-network
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: landscore-server
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://landscore:landscore_secret_2024@postgres:5432/landscore_db?schema=public
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production-min-32-chars
+      JWT_EXPIRES_IN: 7d
+      PORT: 3001
+      NODE_ENV: production
+      CLIENT_URL: http://localhost:3000
+      GEMINI_API_KEY: ${GEMINI_API_KEY} # Pass this from host env
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX_REQUESTS: 100
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - landscore-network
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001/api
+        NEXT_PUBLIC_MAP_STYLE: https://basemaps.cartocdn.com/gl/positron-gl-style/style.json
+        NEXT_PUBLIC_DEFAULT_LAT: 30.2672
+        NEXT_PUBLIC_DEFAULT_LNG: -97.7431
+        NEXT_PUBLIC_DEFAULT_ZOOM: 11
+    container_name: landscore-client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    networks:
+      - landscore-network
 
 volumes:
   landscore_postgres_data:
@@ -42,5 +89,5 @@ volumes:
     driver: local
 
 networks:
-  default:
+  landscore-network:
     name: landscore-network
